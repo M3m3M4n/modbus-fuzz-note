@@ -2,19 +2,13 @@
 
 ***20/02/2022***
 
-TODO: INSERT abstract
+About modbus protocol and fuzzing it.
 
 ## 1. Modbus
 
 Having been around since 1979 \[[1]\], there are countless posts / papers about this protocol out there already. So in this part, even through I once again covering it\'s details, the infomation should be short and to the point as much as possible. I will put reference links in case you want to read more.
 
 ### 1.1 Modbus frame & ADU
-
-***TL;DR***:
-
-- A Modbus "frame" consists of an Application Data Unit (ADU), which encapsulates a Protocol Data Unit (PDU):
-  - ADU = Address + PDU + Error check,
-  - PDU = Function code + Data.
 
 Supported by almost if not all industrial automation devices, the modbus protocol is simple to implement and versatile in transfer channel. Most used are modbus TCP and modbus serial (RS232, RS485).
 
@@ -127,6 +121,12 @@ If errors were to occur. The slave returns a *negative* response.
 
 ***NOTE:*** The modbus specification dictates that data in the PDU is big endian.
 
+Recap:
+
+- A Modbus "frame" consists of an Application Data Unit (ADU), which encapsulates a Protocol Data Unit (PDU):
+  - ADU = Address + PDU + Error check,
+  - PDU = Function code + Data.
+
 ## 2. Fuzzing modbus
 
 When pentesting new modbus device, being able to identify all supported/hidden functions is important. From all we learnt from section 1, its simple data structure makes prime target for fuzzing. In this post I'll test 3 tools that might help with function discovery as well as actual fuzzing workload. All with 1 hour of fuzzing to see if they can identify an \'untintentional\' bug, not really long enough for benchmarking but should be enough for a PoC.
@@ -147,9 +147,9 @@ There are many way you can take to create a low-cost modbus test device. Options
   - [Modbus libraries](https://minimalmodbus.readthedocs.io/en/stable/related.html)
 - For quick and dirty testing:
   - pymodbus also have [REPL \(Read Evaluate Print Loop\)](https://pymodbus.readthedocs.io/en/latest/source/library/REPL.html)
-  - Also recommended by \[5\] is [modbus test utility](https://forumautomation.com/t/modbus-test-utility-free-alternative-to-modscan-modbus-poll-simply-modbus/2828)
+  - Also recommended by \[[4]\] is [modbus test utility](https://forumautomation.com/t/modbus-test-utility-free-alternative-to-modscan-modbus-poll-simply-modbus/2828)
 
-For our testing purposes, I will reuse the pymodbus program from \[[5]\]. Copy and paste will do. This program will ***\'crash\'*** when master(client) read from any input register with address higher than 0xff.
+For our testing purposes, I will reuse the pymodbus program from \[[4]\]. Copy and paste will do. This program will ***\'crash\'*** when master(client) read from any input register with address higher than 0xff.
 
 ```py
 #!/usr/bin/env python3
@@ -205,11 +205,11 @@ if __name__ == "__main__":
 
 ### 2.2 [Boofuzz](https://boofuzz.readthedocs.io/en/stable/index.html)
 
-***This part follow setup in \[[5]\]. Its a nice short guide of how to use boofuzz for modbus. Recommended.***
+***This part follow setup in \[[4]\]. Its a nice short guide of how to use boofuzz for modbus. Recommended.***
 
 Boofuzz is a fuzzer specialized in fuzzing network protocol. You can define any protocol structure and keyword for fuzzing. In modbus case, that is not necessary however, since the fields are all binary value. This makes the job easier for us.
 
-Fuzzer code from \[[5]\]. Everything is explained nicely.
+Fuzzer code from \[[4]\]. Everything is explained nicely.
 
 ```python
 #!/usr/bin/env python3
@@ -270,7 +270,7 @@ This code does not implement any form of crash detection or restarting server co
 
 Generally, I always use AFL for fuzzing codes that feed on binary data. This time is a little different, since what I want to do is fuzzing a blackbox device over network, normal AFL harness won't do. AFL++ devs suggest AFLNET, so I did a little digging and ended up adding modbus support plus support for blackbox remote device fuzzing.
 
-I put detailed instruction for using AFLNET [**here**](TODOTODO).
+I put detailed instruction for using AFLNET [**here**](https://github.com/M3m3M4n/aflnet/tree/modbus_remote/tutorials/remote_only).
 
 **Some thought**: This blackbox device - remote only mode is basically AFL random mutation + AFLNET algorithim for choosing revelent section of request that have effects on the response. At first I worried it might affects AFLNET algorithm, but AFLNET part only work on received responses, so it turns out fine. Lacking code instrumentation ~~can~~will have negative impact on fuzzing performance but sacrifices must be made. *Making the mother of all omelettes here Jack. Can't fret over every egg*, lets hope AFLNET algorithm will help.
 
@@ -282,7 +282,97 @@ Triaging the crashes, the crash condition of reading input register with address
 
 Another thing you might notice is that poor exec speed. The main culprit is the monitor script that run every fuzzing cycle with system() + bash shell. Its better to have something that run natively and not forking constantly would improve speed tremendously (~5x). I'm thinking of fork-server like monitor system with template c code for customization, but that is for later.
 
-### 2.4 [MTF-Storm](https://github.com/ntinosk-mtf/etfa2018)
+### 2.4 Testing AFLNET vs boofuzz for a local target
+
+Needless to say, running and monitoring fuzzing target locally is \"slightly\" more beneficial and is encouraged. For AFLNET, the data from instrumented binary will increase fuzzer performance by a huge margin. For boofuzz managing binary state is also easier with its process monitor.
+
+I will setup and compare AFLNET and boofuzz for a local target here. Again, only speed aspect is of concern as fuzzing a single target for only 1 hour will not provide other meaningful metrics. You can follow along if you want or skip to the end for speed comparison.
+
+For AFLNET, setup instruction is [**here**](https://github.com/M3m3M4n/aflnet/tree/modbus_remote/tutorials/modbustcp)
+
+For boofuzz:
+
+- Compile uninstrumented test binary random-test-server from libmodbus:
+  - install libmodbus-dev from apt
+  - clone libmodbus repo
+  - make, the file should be in libmodbus/tests/.libs/random-test-server
+
+A slight modification is made to boofuzz script:
+
+```python
+#!/usr/bin/env python3
+
+from boofuzz import *
+import time
+import os, sys
+import signal
+
+def main():
+    ip = "127.0.0.1"
+    procmonport = 26002
+    port = 1502
+    start_cmd = os.getcwd() + "/random-test-server"
+    stop_cmd = 'bash -c "kill -9 $(ps -aux | grep \[r\]andom-test-server |  awk \'{print $2}\')"'
+    options = {"stop_commands": [stop_cmd], "start_commands": [start_cmd]}
+    procmon = ProcessMonitor(ip, procmonport)
+    procmon.set_options(**options)
+    monitors = [procmon]
+    session = Session(target=Target(connection=TCPSocketConnection(ip, port), restart_threshold=1, restart_timeout=1.0, monitors=monitors))
+
+    ##
+    # Modbus TCP header:
+    # * 2-byte transaction id
+    # * 2-byte protocol id, must be 0000
+    # * 2-byte message length
+    # * 1 byte unit ID
+    #
+    # followed by request data:
+    # * 1 byte function ID
+    # * 2-byte starting address
+    # * 2-byte number of registers
+    s_initialize(name="Read Input Registers")
+
+    if s_block_start("header"):
+        # Transaction ID
+        s_bytes(value=bytes([0x00, 0x01]), size=2, max_len=2, name="transaction_id")
+        # Protocol ID. Fuzzing this usually doesn't provide too much value so let's leave it fixed.
+        # We can also use s_static here.
+        s_bytes(value=bytes([0x00, 0x00]), size=2, max_len=2, name="proto_id", fuzzable=False)
+        # Length. Fuzzing this is generally useful but we'll keep it fixed to make this tutorial's
+        # data set easier to explore.
+        s_bytes(value=bytes([0x00, 0x06]), size=2, max_len=2, name="len", fuzzable=False)
+        # Unit ID. Once again, fuzzing this usually doesn't provide too much value.
+        s_bytes(value=bytes([0x01]), size=1, max_len=1, name="unit_id", fuzzable=False)
+    s_block_end()
+
+    if s_block_start("data"):
+        # Function ID. Fixed to Read Input Registers (04)
+        s_bytes(value=bytes([0x04]), size=1, max_len=1, name="func_id", fuzzable=False)
+        # Address of the first register to read
+        s_bytes(value=bytes([0x00, 0x00]), size=2, max_len=2, name="start_addr")
+        # Number of registers to read
+        s_bytes(value=bytes([0x00, 0x01]), size=2, max_len=2, name="reg_num")
+    s_block_end()
+
+    session.connect(s_get("Read Input Registers"))
+
+    session.fuzz()
+
+if __name__ == "__main__":
+    main()
+```
+
+AFLNET runs modbus tests at ~40 exec/s, bring it in line with other protocol. If you want faster speed, lots of fine-tuning with delays are required.
+
+![aflnet-local](./imgs/aflnet-local.png)
+
+For boofuzz, its not very promising...
+
+![boofuzz-local](./imgs/boofuzz-local.png)
+
+The reason is this target binary stops after connection close. And boofuzz does this after every test case, then binary have to start again, lead to abyssmal performance. The result may be better with a target that has better connection management, so I tried boofuzz with the python server from earlier, with process monitoring ofcourse. And the result is still only about 1~2 exec/s.
+
+### 2.5 [MTF-Storm](https://github.com/ntinosk-mtf/etfa2018)
 
 During testing I didn't have much luck fuzzing with this tool. However, its probing functionality can be helpful during target reconnaissance. Which include dumping current coils and registers value.
 
@@ -297,9 +387,9 @@ In 1 hour of fuzzing the payload only varies a little from started data - a long
 1. [MODBUS wikipedia](https://en.wikipedia.org/wiki/Modbus)
 2. [MODBUS APPLICATION PROTOCOL SPECIFICATION V1.1b3](https://www.modbus.org/docs/Modbus_Application_Protocol_V1_1b3.pdf)
 3. [Huitsing, Peter & Chandia, Rodrigo & Papa, Mauricio & Shenoi, Sujeet. (2008). Attack taxonomies for the Modbus protocols. International Journal of Critical Infrastructure Protection. 1. 37-44. 10.1016/j.ijcip.2008.08.003.](https://www.researchgate.net/publication/245478702_Attack_taxonomies_for_the_Modbus_protocols)
+4. [https://64k.space/practical-modbus-fuzzing-with-boofuzz.html](https://64k.space/practical-modbus-fuzzing-with-boofuzz.html)
 
 [1]: https://en.wikipedia.org/wiki/Modbus
 [2]: https://www.modbus.org/docs/Modbus_Application_Protocol_V1_1b3.pdf
 [3]: https://www.researchgate.net/publication/245478702_Attack_taxonomies_for_the_Modbus_protocols
-[4]: https://www.ni.com/en-vn/innovations/white-papers/14/the-modbus-protocol-in-depth.html
-[5]: https://64k.space/practical-modbus-fuzzing-with-boofuzz.html
+[4]: https://64k.space/practical-modbus-fuzzing-with-boofuzz.html
