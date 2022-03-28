@@ -2,7 +2,7 @@
 
 ***20/02/2022***
 
-About modbus protocol and fuzzing it.
+About modbus protocol and various modbus fuzzers.
 
 ## 1. Modbus
 
