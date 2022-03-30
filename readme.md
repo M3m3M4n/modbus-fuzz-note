@@ -129,7 +129,7 @@ Recap:
 
 ## 2. Fuzzing modbus
 
-When pentesting new modbus device, being able to identify all supported/hidden functions is important. From all we learnt from section 1, its simple data structure makes prime target for fuzzing. In this post I'll test 3 tools that might help with function discovery as well as actual fuzzing workload. All with 1 hour of fuzzing to see if they can identify an \'untintentional\' bug, not really long enough for benchmarking but should be enough for a PoC.
+When pentesting new modbus device, being able to identify all supported/hidden functions is important. From all we have learnt from section 1, its simple data structure makes prime target for fuzzing. In this post I'll test 3 tools that might help with function discovery as well as actual fuzzing workload. All with 1 hour of fuzzing to see if they can identify an \'untintentional\' bug, not really long enough for benchmarking but should be enough for a PoC.
 
 ### 2.1 Creating test devices
 
